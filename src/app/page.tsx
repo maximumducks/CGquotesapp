@@ -15,40 +15,76 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [favorites, setFavorites] = useState<Quote[]>([]);
 
-  const fetchNewQuote = async () => {
-    setLoading(true);
+  const fetchWithTimeout = async (url: string, options = {}, timeout = 5000) => {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
     try {
-      const response = await fetch('https://api.quotable.io/random', {
-        method: 'GET',
-        headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
-        },
-        next: { revalidate: 0 },
-        cache: 'no-store'
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal
       });
-      
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      if (!data || !data.content || !data.author) {
-        throw new Error('Invalid data received from API');
-      }
-      
-      setQuote({
-        content: data.content,
-        author: data.author
-      });
+      clearTimeout(id);
+      return response;
     } catch (error) {
-      console.error('Error fetching quote:', error);
-      setQuote({
-        content: 'Failed to fetch quote. Please try again.',
-        author: 'System'
-      });
-    } finally {
-      setLoading(false);
+      clearTimeout(id);
+      throw error;
+    }
+  };
+
+  const fetchNewQuote = async (retries = 3) => {
+    setLoading(true);
+    let attempt = 0;
+    
+    while (attempt < retries) {
+      try {
+        console.log(`Attempt ${attempt + 1} to fetch quote`);
+        const response = await fetchWithTimeout('/api/quote', {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json',
+          },
+          cache: 'no-store',
+        });
+        
+        console.log('Response status:', response.status);
+        const responseData = await response.json();
+        console.log('Response data:', responseData);
+        
+        if (!response.ok || responseData.error) {
+          console.error('Error response:', responseData);
+          throw new Error(responseData.details || `HTTP error! status: ${response.status}`);
+        }
+        
+        if (!responseData || !responseData.content || !responseData.author) {
+          console.error('Invalid data received:', responseData);
+          throw new Error('Invalid data received from API');
+        }
+        
+        setQuote({
+          content: responseData.content,
+          author: responseData.author,
+          id: responseData._id
+        });
+        setLoading(false);
+        return; // Success, exit the retry loop
+      } catch (error) {
+        attempt++;
+        console.error(`Attempt ${attempt} failed:`, error);
+        
+        if (attempt === retries) {
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+          console.error('All retry attempts failed:', errorMessage);
+          setQuote({
+            content: `Unable to fetch quote. Please check your internet connection and try again.`,
+            author: 'System',
+            id: 'error'
+          });
+          setLoading(false);
+        } else {
+          // Wait for 2 seconds before retrying
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+      }
     }
   };
 
@@ -120,7 +156,7 @@ export default function Home() {
         <div className={styles.buttonContainer}>
           <button 
             className={styles.newQuoteButton}
-            onClick={fetchNewQuote}
+            onClick={() => fetchNewQuote()}
             disabled={loading}
           >
             New Quote
